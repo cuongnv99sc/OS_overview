@@ -4,12 +4,14 @@ UNAME_S := $(shell uname -s)
 # Set compiler based on OS
 ifeq ($(UNAME_S),Darwin)
     CC = clang
+	CFLAGS = -Wall -Wextra -Werror -Iinclude
 else
     CC = gcc
+	CFLAGS = -Wall -Wextra -Werror -Iinclude -pthread
 endif
 
 # Compiler flags
-CFLAGS = -Wall -Wextra -Werror -Iinclude
+#CFLAGS = -Wall -Wextra -Werror -Iinclude
 #CFLAGS = -Wall
 
 # Source files
@@ -26,7 +28,7 @@ all: $(TARGET)
 
 # Link object files to create the executable
 $(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(CFLAGS)
 
 # Compile each source file into an object file
 %.o: %.c
