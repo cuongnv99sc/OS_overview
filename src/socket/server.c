@@ -3,62 +3,114 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
-#define PORT 65432
-#define BUFFER_SIZE 1024
+#define PORT 63333
+#define BUFFER_SIZE 2048
+#define MAX_CLIENTS 5
 
-int main() {
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE] = {0};
+typedef struct {
+    char name[50];
+    char message[200];
+} ClientMessage;
 
-    // Tạo file descriptor cho socket
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
+int client_sockets[MAX_CLIENTS];
+int client_count = 0;
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void broadcast_message(ClientMessage *client_msg, int sender_socket) {
+    pthread_mutex_lock(&clients_mutex);
+
+    for (int i = 0; i < client_count; i++) {
+        if (client_sockets[i] != sender_socket) {
+            if (send(client_sockets[i], client_msg, sizeof(ClientMessage), 0) == -1) {
+                perror("send");
+            }
+        }
     }
 
-    // Đặt các thuộc tính cho address
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
-
-    // Gán socket với địa chỉ và cổng
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("bind failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Lắng nghe các kết nối
-    if (listen(server_fd, 3) < 0) {
-        perror("listen");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-
-    printf("Server is listening on port %d\n", PORT);
-
-    // Chấp nhận kết nối từ client
-    if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
-        perror("accept");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-
-    // Đọc dữ liệu từ client
-    int valread = read(new_socket, buffer, BUFFER_SIZE);
-    printf("Received: %s\n", buffer);
-
-    // Gửi phản hồi tới client
-    char *response = "Hello from server";
-    send(new_socket, response, strlen(response), 0);
-    printf("Response sent\n");
-
-    // Đóng socket
-    close(new_socket);
-    close(server_fd);
-    return 0;
+    pthread_mutex_unlock(&clients_mutex);
 }
 
+void *handle_client(void *client_socket) {
+    int sock = *((int *)client_socket);
+    ClientMessage client_msg;
+    int bytes_read;
+
+    while ((bytes_read = recv(sock, &client_msg, sizeof(ClientMessage), 0)) > 0) {
+        printf("Received message from %s: %s\n", client_msg.name, client_msg.message);
+        broadcast_message(&client_msg, sock);
+    }
+
+    // Remove client from the list
+    pthread_mutex_lock(&clients_mutex);
+
+    for (int i = 0; i < client_count; i++) {
+        if (client_sockets[i] == sock) {
+            for (int j = i; j < client_count - 1; j++) {
+                client_sockets[j] = client_sockets[j + 1];
+            }
+            client_count--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&clients_mutex);
+    close(sock);
+
+    return NULL;
+}
+
+int main() {
+    int server_socket, client_socket;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_addr_size = sizeof(client_addr);
+    pthread_t tid;
+
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_socket == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        perror("bind");
+        close(server_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(server_socket, 10) == -1) {
+        perror("listen");
+        close(server_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port %d\n", PORT);
+
+    while (1) {
+        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addr_size);
+        if (client_socket == -1) {
+            perror("accept");
+            continue;
+        }
+
+        pthread_mutex_lock(&clients_mutex);
+
+        if (client_count < MAX_CLIENTS) {
+            client_sockets[client_count++] = client_socket;
+            pthread_create(&tid, NULL, &handle_client, (void *)&client_socket);
+        } else {
+            fprintf(stderr, "Max clients reached. Rejecting: %d\n", client_socket);
+            close(client_socket);
+        }
+
+        pthread_mutex_unlock(&clients_mutex);
+    }
+
+    close(server_socket);
+    return 0;
+}

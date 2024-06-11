@@ -3,49 +3,75 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
-#define PORT 65432
-#define BUFFER_SIZE 1024
+#define PORT 63333
+#define BUFFER_SIZE 2048
 #define SERVER_IP "127.0.0.1"
 
-int main() {
-    int sock = 0;
-    struct sockaddr_in serv_addr;
-    char *message = "Hello from client";
-    char buffer[BUFFER_SIZE] = {0};
+typedef struct {
+    char name[50];
+    char message[200];
+} ClientMessage;
 
-    // Tạo file descriptor cho socket
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        printf("\n Socket creation error \n");
-        return -1;
-    }
-
-    // Đặt các thuộc tính cho address
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
-
-    // Chuyển đổi địa chỉ IP từ text sang binary
-    if(inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
-        printf("\nInvalid address/ Address not supported \n");
-        return -1;
-    }
-
-    // Kết nối tới server
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        printf("\nConnection Failed \n");
-        return -1;
-    }
-
-    // Gửi dữ liệu tới server
-    send(sock, message, strlen(message), 0);
-    printf("Message sent\n");
-
-    // Đọc phản hồi từ server
-    int valread = read(sock, buffer, BUFFER_SIZE);
-    printf("Received: %s\n", buffer);
-
-    // Đóng socket
-    close(sock);
-    return 0;
+void send_message(int socket, ClientMessage *client_msg) {
+    send(socket, client_msg, sizeof(ClientMessage), 0);
 }
 
+void *receive_messages(void *socket) {
+    int client_socket = *((int *)socket);
+    ClientMessage client_msg;
+    int bytes_read;
+
+    while ((bytes_read = recv(client_socket, &client_msg, sizeof(ClientMessage), 0)) > 0) {
+        printf("[%s]: %s\n", client_msg.name, client_msg.message);
+    }
+
+    return NULL;
+}
+
+int main() {
+    int client_socket;
+    struct sockaddr_in server_addr;
+    ClientMessage client_msg;
+    pthread_t recv_thread;
+
+    client_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (client_socket == -1) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+    server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
+
+    if (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        printf("Cannot connect to server!\n");
+        close(client_socket);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Connected to server\n");
+
+    printf("Enter your name: ");
+    fgets(client_msg.name, 50, stdin);
+    client_msg.name[strcspn(client_msg.name, "\n")] = 0;  // Remove newline character
+
+    pthread_create(&recv_thread, NULL, &receive_messages, (void *)&client_socket);
+    printf("Joined the chat group\n");
+
+    while (1) {
+        fgets(client_msg.message, 200, stdin);
+        client_msg.message[strcspn(client_msg.message, "\n")] = 0;  // Remove newline character
+
+        if (strcmp(client_msg.message, "exit") == 0) {
+            break;
+        }
+
+        send_message(client_socket, &client_msg);
+    }
+
+    close(client_socket);
+    return 0;
+}
